@@ -8,7 +8,7 @@ use clap::Parser;
 use mcrs::{Block, Connection, Coordinate};
 
 use crate::args::Command;
-use mcutils::{read_data, write_data};
+use mcutilz::{read_data, write_data};
 
 fn main() -> Result<()> {
     let args = args::Args::parse();
@@ -16,7 +16,24 @@ fn main() -> Result<()> {
     let mut mc = Connection::new().expect("Failed to connect to Minecraft server");
 
     match args.command {
-        Command::Clear { origin, bound } => {
+        Command::Clear { radius, dx, dy, dz } => {
+            let player_pos = mc.get_player_position()?;
+            
+            let rx = dx.or(radius).unwrap_or(args::DEFAULT_DX) as i32;
+            let ry = dy.or(radius).unwrap_or(args::DEFAULT_DY) as i32;
+            let rz = dz.or(radius).unwrap_or(args::DEFAULT_DZ) as i32;
+
+            let origin = Coordinate::new(
+                player_pos.x - rx,
+                player_pos.y - ry,
+                player_pos.z - rz,
+            );
+            let bound = Coordinate::new(
+                player_pos.x + rx,
+                player_pos.y + ry,
+                player_pos.z + rz,
+            );
+
             let (origin, bound) = sort_corners(origin, bound);
 
             let chunk = mc.get_blocks(origin, bound)?;
@@ -36,11 +53,24 @@ fn main() -> Result<()> {
             println!("Successfully cleared {:?} chunk at {}.", size, origin);
         }
 
-        Command::Save {
-            filename,
-            origin,
-            bound,
-        } => {
+        Command::Save { filename, radius, dx, dy, dz } => {
+            let player_pos = mc.get_player_position()?;
+            
+            let rx = dx.or(radius).unwrap_or(args::DEFAULT_DX) as i32;
+            let ry = dy.or(radius).unwrap_or(args::DEFAULT_DY) as i32;
+            let rz = dz.or(radius).unwrap_or(args::DEFAULT_DZ) as i32;
+
+            let origin = Coordinate::new(
+                player_pos.x - rx,
+                player_pos.y - ry,
+                player_pos.z - rz,
+            );
+            let bound = Coordinate::new(
+                player_pos.x + rx,
+                player_pos.y + ry,
+                player_pos.z + rz,
+            );
+
             let (origin, bound) = sort_corners(origin, bound);
 
             let file = fs::OpenOptions::new()
@@ -51,12 +81,12 @@ fn main() -> Result<()> {
             let mut writer = io::BufWriter::new(file);
 
             let mut chunk = mc.get_blocks_stream(origin, bound)?;
-            write_data(&mut writer, &mut chunk)?;
+            write_data(&mut writer, &mut chunk, player_pos)?;
 
             println!(
                 "Successfully saved {:?} chunk at {}.",
                 chunk.size(),
-                chunk.origin(),
+                player_pos,
             );
         }
 
@@ -64,25 +94,55 @@ fn main() -> Result<()> {
             let file = fs::OpenOptions::new().read(true).open(filename)?;
             let mut reader = io::BufReader::new(file);
 
-            let mut entries = read_data(&mut reader)?;
+            let blocks = read_data(&mut reader)?;
 
-            let chunk = mc.get_blocks(entries.origin(), entries.bound())?;
+            if blocks.is_empty() {
+                println!("Loaded empty chunk.");
+                return Ok(());
+            }
 
-            for entry in &mut entries {
-                let (coord, block) = entry?;
+            let new_origin = mc.get_player_position()?;
+
+            // Compute size and bound
+            let mut min_coord = blocks[0].0;
+            let mut max_coord = blocks[0].0;
+            for (coord, _) in &blocks {
+                min_coord.x = std::cmp::min(min_coord.x, coord.x);
+                min_coord.y = std::cmp::min(min_coord.y, coord.y);
+                min_coord.z = std::cmp::min(min_coord.z, coord.z);
+                max_coord.x = std::cmp::max(max_coord.x, coord.x);
+                max_coord.y = std::cmp::max(max_coord.y, coord.y);
+                max_coord.z = std::cmp::max(max_coord.z, coord.z);
+            }
+
+            let shifted_origin = Coordinate::new(
+                min_coord.x + new_origin.x,
+                min_coord.y + new_origin.y,
+                min_coord.z + new_origin.z,
+            );
+            let shifted_bound = Coordinate::new(
+                max_coord.x + new_origin.x,
+                max_coord.y + new_origin.y,
+                max_coord.z + new_origin.z,
+            );
+
+            let chunk = mc.get_blocks(shifted_origin, shifted_bound)?;
+
+            for (coord, block) in blocks {
+                let shifted_coord = Coordinate::new(
+                    coord.x + new_origin.x,
+                    coord.y + new_origin.y,
+                    coord.z + new_origin.z,
+                );
                 let current_block = chunk
-                    .get_worldspace(coord)
-                    .expect("Chunk should contain coordinate");
+                    .get_worldspace(shifted_coord)
+                    .unwrap_or(mcrs::Block::AIR);
                 if block != current_block {
-                    mc.set_block(coord, block)?;
+                    mc.set_block(shifted_coord, block)?;
                 }
             }
 
-            println!(
-                "Successfully loaded {:?} chunk at {}.",
-                entries.size(),
-                entries.origin()
-            );
+            println!("Successfully loaded chunk offset to {}.", new_origin);
         }
     }
 

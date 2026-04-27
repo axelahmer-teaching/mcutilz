@@ -1,138 +1,70 @@
-use std::cmp::Ordering;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use anyhow::{Result, bail};
 use mcrs::chunk::ChunkStream;
-use mcrs::{Block, Coordinate, Size};
+use mcrs::{Block, Coordinate};
 
-const MAGIC_NUMBER: u16 = 0xa3f9;
-const VERSION: u16 = 0x01_00;
-
-pub fn write_data(file: &mut impl Write, chunk: &mut ChunkStream<'_>) -> Result<()> {
-    file.write_all(&MAGIC_NUMBER.to_le_bytes())?;
-    file.write_all(&VERSION.to_le_bytes())?;
-
-    file.write_all(&chunk.origin().x.to_le_bytes())?;
-    file.write_all(&chunk.origin().y.to_le_bytes())?;
-    file.write_all(&chunk.origin().z.to_le_bytes())?;
-
-    file.write_all(&chunk.size().x.to_le_bytes())?;
-    file.write_all(&chunk.size().y.to_le_bytes())?;
-    file.write_all(&chunk.size().z.to_le_bytes())?;
-
+pub fn write_data(
+    file: &mut impl Write,
+    chunk: &mut ChunkStream<'_>,
+    player_pos: Coordinate,
+) -> Result<()> {
+    let mut index = 0;
+    let origin = chunk.origin();
+    let size = chunk.size();
     while let Some(item) = chunk.next()? {
-        file.write_all(&item.block().id.to_le_bytes())?;
-        file.write_all(&item.block().modifier.to_le_bytes())?;
+        let coord = origin + size.index_to_offset(index);
+        let block = item.block();
+        let rel_x = coord.x - player_pos.x;
+        let rel_y = coord.y - player_pos.y;
+        let rel_z = coord.z - player_pos.z;
+        writeln!(
+            file,
+            "{},{},{}: {}:{}",
+            rel_x, rel_y, rel_z, block.id, block.modifier
+        )?;
+        index += 1;
     }
 
     Ok(())
 }
 
-pub fn read_data<R: Read>(file: &mut R) -> Result<BlockReader<'_, R>> {
-    check_data_metadata(file)?;
+pub fn read_data<R: Read>(file: &mut R) -> Result<Vec<(Coordinate, Block)>> {
+    let reader = io::BufReader::new(file);
+    let mut blocks = Vec::new();
 
-    let x = read_i32(file)?;
-    let y = read_i32(file)?;
-    let z = read_i32(file)?;
-    let origin = Coordinate::new(x, y, z);
-
-    let x = read_u32(file)?;
-    let y = read_u32(file)?;
-    let z = read_u32(file)?;
-    let size = Size::new(x, y, z);
-
-    Ok(BlockReader::new(file, origin, size))
-}
-
-pub struct BlockReader<'a, R> {
-    reader: &'a mut R,
-    index: u32,
-    origin: Coordinate,
-    size: Size,
-}
-
-impl<'a, R> BlockReader<'a, R> {
-    fn new(reader: &'a mut R, origin: Coordinate, size: Size) -> Self {
-        Self {
-            reader,
-            index: 0,
-            origin,
-            size,
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
         }
-    }
 
-    pub fn origin(&self) -> Coordinate {
-        self.origin
-    }
-    pub fn size(&self) -> Size {
-        self.size
-    }
-    pub fn bound(&self) -> Coordinate {
-        self.origin + self.size
-    }
-}
+        let parts: Vec<&str> = line.split(": ").collect();
+        if parts.len() != 2 {
+            bail!("Invalid file format: {}", line);
+        }
 
-impl<R: Read> Iterator for &mut BlockReader<'_, R> {
-    type Item = Result<(Coordinate, Block)>;
+        let coord_parts: Vec<&str> = parts[0].split(',').collect();
+        if coord_parts.len() != 3 {
+            bail!("Invalid coordinates: {}", parts[0]);
+        }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let id = match try_read_u32(self.reader) {
-            Ok(Some(id)) => id,
-            Ok(None) => return None,
-            Err(error) => return Some(Err(error)),
+        let x: i32 = coord_parts[0].parse()?;
+        let y: i32 = coord_parts[1].parse()?;
+        let z: i32 = coord_parts[2].parse()?;
+
+        let block_parts: Vec<&str> = parts[1].split(':').collect();
+        let (id, modifier) = if block_parts.len() == 2 {
+            (block_parts[0].parse()?, block_parts[1].parse()?)
+        } else if block_parts.len() == 1 {
+            (block_parts[0].parse()?, 0)
+        } else {
+            bail!("Invalid block: {}", parts[1]);
         };
-        let modifier = match read_u32(self.reader) {
-            Ok(modifier) => modifier,
-            Err(error) => return Some(Err(error.into())),
-        };
-        let block = Block::new(id, modifier);
 
-        let coordinate = self.origin + self.size.index_to_offset(self.index as usize);
-
-        self.index += 1;
-        Some(Ok((coordinate, block)))
+        blocks.push((Coordinate::new(x, y, z), Block::new(id, modifier)));
     }
-}
 
-fn check_data_metadata(file: &mut impl Read) -> Result<()> {
-    let magic_number = read_u16(file)?;
-    if magic_number != MAGIC_NUMBER {
-        bail!("Invalid file format (signature does not match)");
-    }
-    let version = read_u16(file)?;
-    match version.cmp(&VERSION) {
-        Ordering::Equal => Ok(()),
-        Ordering::Less => bail!("Outdated file format (try using an older version of mcutils)"),
-        Ordering::Greater => bail!("Outdated program (try updating mcutils)"),
-    }
-}
-
-fn read_u16(file: &mut impl Read) -> io::Result<u16> {
-    let mut buf = [0u8; 2];
-    file.read_exact(&mut buf)?;
-    Ok(u16::from_le_bytes(buf))
-}
-
-fn read_i32(file: &mut impl Read) -> io::Result<i32> {
-    let mut buf = [0u8; 4];
-    file.read_exact(&mut buf)?;
-    Ok(i32::from_le_bytes(buf))
-}
-
-fn read_u32(file: &mut impl Read) -> io::Result<u32> {
-    let mut buf = [0u8; 4];
-    file.read_exact(&mut buf)?;
-    Ok(u32::from_le_bytes(buf))
-}
-
-fn try_read_u32(file: &mut impl Read) -> Result<Option<u32>> {
-    let mut buf = [0u8; 4];
-    let bytes_read = file.read(&mut buf)?;
-    if bytes_read == 0 {
-        return Ok(None);
-    }
-    if bytes_read < 4 {
-        bail!("Truncated data in file");
-    }
-    Ok(Some(u32::from_le_bytes(buf)))
+    Ok(blocks)
 }

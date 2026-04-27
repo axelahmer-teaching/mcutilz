@@ -1,7 +1,8 @@
-use std::{error, fmt};
-
 use clap::{Parser, Subcommand};
-use mcrs::Coordinate;
+
+pub const DEFAULT_DX: u32 = 20;
+pub const DEFAULT_DY: u32 = 10;
+pub const DEFAULT_DZ: u32 = 20;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -14,63 +15,48 @@ pub struct Args {
 pub enum Command {
     /// Clear a 3D block region (set every block to air)
     ///
-    /// Order of bounding coordinates do not matter; they will be normalized
+    /// The cleared region is centered on the player's current position.
     Clear {
-        /// First corner of 3D block region
-        #[arg(value_parser = parse_coordinate)]
-        origin: Coordinate,
-        /// Second corner of 3D block region
-        #[arg(value_parser = parse_coordinate)]
-        bound: Coordinate,
+        /// Set a uniform radius across all dimensions (overrides defaults)
+        #[arg(short, long)]
+        radius: Option<u32>,
+        /// Radius in the X dimension (east/west) [default: 20]
+        #[arg(long)]
+        dx: Option<u32>,
+        /// Radius in the Y dimension (up/down) [default: 10]
+        #[arg(long)]
+        dy: Option<u32>,
+        /// Radius in the Z dimension (north/south) [default: 20]
+        #[arg(long)]
+        dz: Option<u32>,
     },
 
-    /// Store a 3D block region to a file
+    /// Store a 3D block region to a text file centered around the player
     ///
-    /// File will include coordinates and block data in a binary format
-    ///
-    /// Order of bounding coordinates do not matter; they will be normalized
+    /// File will include relative coordinates and block data in a plain text format `x,y,z: id:modifier`,
+    /// making it easy to generate regions for autograders.
     Save {
-        /// Name of binary file to save to
+        /// Name of text file to save to
         filename: String,
-        /// First corner of 3D block region
-        #[arg(value_parser = parse_coordinate)]
-        origin: Coordinate,
-        /// Second corner of 3D block region
-        #[arg(value_parser = parse_coordinate)]
-        bound: Coordinate,
+        /// Set a uniform radius across all dimensions (overrides defaults)
+        #[arg(short, long)]
+        radius: Option<u32>,
+        /// Radius in the X dimension (east/west) [default: 20]
+        #[arg(long)]
+        dx: Option<u32>,
+        /// Radius in the Y dimension (up/down) [default: 10]
+        #[arg(long)]
+        dy: Option<u32>,
+        /// Radius in the Z dimension (north/south) [default: 20]
+        #[arg(long)]
+        dz: Option<u32>,
     },
 
-    /// Load a 3D block region from a file
+    /// Load a 3D block region from a text file
     ///
-    /// Always loads region at same position it was saved
+    /// The saved region is loaded relative to the player's current position within the world.
     Load {
-        /// Name of binary file to load from
+        /// Name of text file to load from
         filename: String,
     },
-}
-
-#[derive(Debug)]
-struct ParseCoordinateError;
-impl error::Error for ParseCoordinateError {}
-impl fmt::Display for ParseCoordinateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Must be of the form `x,y,z`")
-    }
-}
-
-fn parse_coordinate(arg: &str) -> Result<Coordinate, ParseCoordinateError> {
-    let mut parts = arg.split(',').map(|part| part.parse::<i32>().ok());
-    let Some(x) = parts.next().flatten() else {
-        return Err(ParseCoordinateError);
-    };
-    let Some(y) = parts.next().flatten() else {
-        return Err(ParseCoordinateError);
-    };
-    let Some(z) = parts.next().flatten() else {
-        return Err(ParseCoordinateError);
-    };
-    if parts.next().is_some() {
-        return Err(ParseCoordinateError);
-    }
-    Ok(Coordinate { x, y, z })
 }

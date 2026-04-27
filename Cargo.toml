@@ -1,12 +1,12 @@
 [package]
-name = "mcutils"
-version = "0.2.1"
+name = "mcutilz"
+version = "0.3.0"
 edition = "2024"
 description = "Save and load regions of a local Minecraft world"
-authors = ["darcy"]
+authors = ["darcy", "axelahmer"]
 license = "GPL-3.0"
-documentation = "https://docs.rs/mcutils/latest/mcutils"
-repository = "https://github.com/dxrcy/mcutils"
+documentation = "https://docs.rs/mcutilz/latest/mcutilz"
+repository = "https://github.com/axelahmer-teaching/mcutilz"
 keywords = ["minecraft", "api", "mcrs"]
 exclude = ["target"]
 
